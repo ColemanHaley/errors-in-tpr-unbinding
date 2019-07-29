@@ -10,6 +10,9 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("experiment", nargs="?", type=str, default="")
     parser.add_argument("--cuda", nargs="?", const="-1", type=int)
+    parser.add_argument("--n_fillers", type=int)
+    parser.add_argument("--filler_dim", type=int)
+    parser.add_argument("--topk", nargs="*", type=int, default=[1])
     return parser.parse_args()
 
 
@@ -19,11 +22,9 @@ def torch_sample_spherical(npoints, ndim, nsamples, device):
     return vecs
 
 
-def type1_experiment(device):
+def type1_experiment(nfillers, fillerdim, device):
     print("Beginning Type 1 experiments...")
-    nfillers = 50
     print(f"Number of fillers ${nfillers}")
-    fillerdim = 200
     print(f"Dimensionality of fillers ${fillerdim}")
     nsamples = 250
     print(f"Number of samples to estimate probability")
@@ -71,19 +72,17 @@ def type1_experiment(device):
         del distances
         del closest
         del errors
-    filename = "type1_results.npy"
+    filename = "results/type1_results_nfillers_{nfillers}_fillerdim_{fillerdim}.npy"
     with open(filename) as file:
         print(f"Writing the estimated probabilities to ./${filename}")
         np.save(file, error_prob)
 
 
-def type2_experiment(device):
+def type2_experiment(nfillers, fillerdim, device):
     x1 = np.array(range(1, 1000))
     y1 = np.zeros(999)
     n = 500
     nsamples = 2000
-    nfillers = 50
-    fillerdim = 200
     N = 50
     F = vec = torch_sample_spherical(
         npoints=nfillers, ndim=fillerdim, nsamples=1, device=device
@@ -116,13 +115,13 @@ def type2_experiment(device):
         del fillers
         del rhats
         del filleris
-    filename = "type2_results.npy"
+    filename = "results/type2_results_nfillers_{nfillers}_fillerdim_{fillerdim}.npy"
     with open(filename) as file:
         print(f"Writing the estimated probabilities to ./${filename}")
         np.save(file, error_prob)
 
 
-def word2vec_experiment(device):
+def word2vec_experiment(fillerdim, topk, device):
     print("Downloading corpus and nltk tools, if necessary.")
     import nltk
     import gensim
@@ -163,13 +162,13 @@ def word2vec_experiment(device):
         print("Pretrained wordvectors loaded.")
     except:
         print("Training word2vec model.")
-        model = gensim.models.Word2Vec(sents, size=300, min_count=1, workers=4)
+        model = gensim.models.Word2Vec(sents, size=fillerdim, min_count=1, workers=4)
         print("Word2Vec training complete!")
         model.wv.save("reuters.wv")
         wv = model.wv
 
     print("Beginning experiment...")
-    error_prob = np.zeros(49)
+    error_prob = np.zeros(len(topk), 49)
     # error_prob_topk = np.zeros(49)
     nsamples = 1
     sents.sort(key=len)
@@ -217,9 +216,22 @@ def word2vec_experiment(device):
             role_unbinding,
         ).to(device)
         print("yayyyy")
-        tops = torch.topk(distances, 25, dim=0)
-        filename = "tops_word2vec_len" + str(i) + ".pt"
-        torch.save(tops, filename)
+        for ki, k in enumerate(topk):
+            tops = torch.topk(distances, k, dim=0)
+            intopk = torch.min(
+                torch.abs(
+                    torch.sum(
+                        topkvecs - fillervecs.unsqueeze(1).expand(-1, k, -1, -1, -1),
+                        dim=0,
+                    )
+                ),
+                dim=0,
+            )
+            error[ki][i] = len(intopk.values.nonzero()) / intopk.values.numel()
+        # filename = "tops_word2vec_len" + str(i) + ".pt"
+        # torch.save(tops, filename)
+    filename = f'results/word2vec_results_fillerdim_{fillerdim}_topk_{topk.replace(" ", "")}.pt'
+    torch.save(error, filename)
 
 
 def main():
@@ -229,22 +241,22 @@ def main():
         if not torch.cuda.is_available():
             print("Cuda is not available. Using cpu instead.")
             raise AttributeError()
-        device_num = get_freer_gpu() if args.cuda == -1 else args.cuda
+        device_num = args.cuda if args.cuda != -1 else get_freer_gpu()
         device = torch.device(f"cuda:${device_num}")
         print(f"Using cuda:${device_num} as the torch device.")
     except AttributeError:
         pass
 
     if args.experiment == "type1":
-        type1_experiment(device)
+        type1_experiment(args.n_fillers, args.filler_dim, device)
     elif args.experiment == "type2":
-        type2_experiment(device)
+        type2_experiment(args.n_fillers, args.filler_dim, device)
     elif args.experiment == "word2vec":
-        word2vec_experiment(device)
+        word2vec_experiment(args.filler_dim, device)
     else:
-        type1_experiment(device)
-        type2_experiment(device)
-        word2vec_experiment(device)
+        type1_experiment(args.n_fillers, args.filler_dim, device)
+        type2_experiment(args.n_fillers, args.filler_dim, device)
+        word2vec_experiment(args.filler_dim, args.topk, device)
 
 
 if __name__ == "__main__":
