@@ -1,6 +1,6 @@
 import argparse
 import os
-from tqdm import tqdm
+#from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -21,6 +21,14 @@ def torch_sample_spherical(npoints, ndim, nsamples, device):
     vecs /= torch.norm(vecs, dim=0)
     return vecs
 
+def get_freer_gpu():
+    import os
+
+    os.system("nvidia-smi -q -d Memory |grep -A4 GPU|grep Free >cuda")
+    memory_available = [int(x.split()[2]) for x in open("cuda", "r").readlines()]
+
+    return np.argmax(memory_available)
+
 
 def type1_experiment(nfillers, fillerdim, device):
     print("Beginning Type 1 experiments...")
@@ -39,7 +47,7 @@ def type1_experiment(nfillers, fillerdim, device):
         fillerdim, nfillers, nsamples
     )  # zipf distribution?
     print("Beginning error probability estimation")
-    for nbindings in tqdm(range(1, 1000, 5)):
+    for nbindings in range(1, 1000, 5):
         rolevecs = torch_sample_spherical(
             npoints=nbindings + 1, ndim=roledim, nsamples=nsamples, device=device
         )
@@ -72,17 +80,15 @@ def type1_experiment(nfillers, fillerdim, device):
         del distances
         del closest
         del errors
-    filename = "results/type1_results_nfillers_{nfillers}_fillerdim_{fillerdim}.npy"
-    with open(filename) as file:
-        print(f"Writing the estimated probabilities to ./${filename}")
-        np.save(file, error_prob)
+    filename = f"results/type1_results_nfillers_{nfillers}_fillerdim_{fillerdim}.npy"
+    np.save(filename, error_prob)
 
 
 def type2_experiment(nfillers, fillerdim, device):
     x1 = np.array(range(1, 1000))
-    y1 = np.zeros(999)
+    error_prob = np.zeros(999)
     n = 500
-    nsamples = 2000
+    nsamples = 250
     N = 50
     F = vec = torch_sample_spherical(
         npoints=nfillers, ndim=fillerdim, nsamples=1, device=device
@@ -91,7 +97,7 @@ def type2_experiment(nfillers, fillerdim, device):
     )  # zipf distribution?
     for k in range(1, 1000, 5):
         rhats = torch_sample_spherical(
-            npoints=k + 1, ndim=n, nsamples=nsamples, device=device()
+            npoints=k + 1, ndim=n, nsamples=nsamples, device=device
         )
         filleris = (
             torch.randint(0, N, (k, nsamples))
@@ -106,19 +112,18 @@ def type2_experiment(nfillers, fillerdim, device):
         distances = torch.einsum("fns, fs -> ns", F, f_tilde).to(device)
         closest = torch.argmax(distances, dim=0).to(device)
         errors = (A_hats - closest).nonzero()
-        y1[k - 1] = len(errors) / 2000
+        error_prob[k - 1] = len(errors) / nsamples
         del errors
         del closest
         del distances
         del f_tilde
         del T
+        del A_hats
         del fillers
         del rhats
         del filleris
-    filename = "results/type2_results_nfillers_{nfillers}_fillerdim_{fillerdim}.npy"
-    with open(filename) as file:
-        print(f"Writing the estimated probabilities to ./${filename}")
-        np.save(file, error_prob)
+    filename = f"results/type2_results_nfillers_{nfillers}_fillerdim_{fillerdim}.npy"
+    np.save(filename, error_prob)
 
 
 def word2vec_experiment(fillerdim, topk, device):
@@ -175,7 +180,7 @@ def word2vec_experiment(fillerdim, topk, device):
     breaks = [i for i in range(1, len(sents)) if len(sents[i]) != len(sents[i - 1])]
     fillerbank = torch.from_numpy(wv.vectors.T)
     roledim = 100
-    for i, brk in tqdm(enumerate(breaks)):
+    for i, brk in enumerate(breaks):
         rhats = torch_sample_spherical(
             npoints=50, ndim=roledim, nsamples=nsamples, device=device
         )
@@ -242,7 +247,7 @@ def main():
             print("Cuda is not available. Using cpu instead.")
             raise AttributeError()
         device_num = args.cuda if args.cuda != -1 else get_freer_gpu()
-        device = torch.device(f"cuda:${device_num}")
+        device = torch.device(f"cuda:{device_num}")
         print(f"Using cuda:${device_num} as the torch device.")
     except AttributeError:
         pass
@@ -252,7 +257,7 @@ def main():
     elif args.experiment == "type2":
         type2_experiment(args.n_fillers, args.filler_dim, device)
     elif args.experiment == "word2vec":
-        word2vec_experiment(args.filler_dim, device)
+        word2vec_experiment(args.filler_dim, args.topk, device)
     else:
         type1_experiment(args.n_fillers, args.filler_dim, device)
         type2_experiment(args.n_fillers, args.filler_dim, device)
