@@ -1,0 +1,4 @@
+results/
+.DS_Store
+.ipynb_checkpoints/
+reuters.wv
